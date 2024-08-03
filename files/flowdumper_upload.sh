@@ -8,7 +8,7 @@ endpoint=""
 config_load 'flowdumper'
 config_get endpoint upload endpoint
 
-id=$(< /etc/flowdumper_id)
+id=$(cat /etc/flowdumper_id)
 id=${id:-unknown}
 
 for FILE in $(ls -t /tmp/flowdumper | tail -n +2);
