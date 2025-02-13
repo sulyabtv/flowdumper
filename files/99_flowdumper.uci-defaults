@@ -8,3 +8,5 @@ min=$(($RANDOM % 60))
 grep -sq flowdumper_upload /etc/crontabs/root || \
     echo "${min} 0 * * * /usr/bin/flowdumper_upload.sh" >> /etc/crontabs/root
 /etc/init.d/cron reload
+
+exit 0
