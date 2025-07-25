@@ -5,7 +5,6 @@ Description goes here.
 
 ## Build Instructions
 
-- Build instructions
 - Install dependencies: `libnetfilter_conntrack`, `libnetfilter_conntrack-devel`, 
 `libmnl`, `libmnl-devel`, `libnfnetlink`, `libnfnetlink-devel`, `libstdc++`
 - Navigate to `src/` and run `make`
@@ -22,6 +21,7 @@ Description goes here.
     - Create (as root) `/usr/bin/flowdumper_upload.sh`, write the following contents, and save:
 
 ```bash
+#!/usr/bin/bash
 endpoint="https://ant.isi.edu/cgi-bin/thottung/up.cgi"
 
 id=$(cat /etc/flowdumper_id)
@@ -37,6 +37,7 @@ done
 
 exit 0
 ```
+    - `chmod +x /usr/bin/flowdumper_upload.sh`
 
 - Set up cron job for upload
     - `sudo crontab -e -u root`, add `30 0 * * * /usr/bin/flowdumper_upload.sh` and save
