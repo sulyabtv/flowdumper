@@ -18,25 +18,7 @@ Description goes here.
     - Generate a random identity for uploading reports
     - `tr -dc A-Za-z0-9 </dev/urandom | head -c 16 | sudo tee /etc/flowdumper_id > /dev/null`
 - Set up upload script
-    - Create (as root) `/usr/bin/flowdumper_upload.sh`, write the following contents, and save:
-
-```bash
-#!/usr/bin/bash
-endpoint="https://ant.isi.edu/cgi-bin/thottung/up.cgi"
-
-id=$(cat /etc/flowdumper_id)
-id=${id:-unknown}
-
-for FILE in $(ls -t /tmp/flowdumper | tail -n +2);
-do
-curl -F "uploaded_file=@/tmp/flowdumper/${FILE}" \
--F "name=fd.${id}.${FILE}" \
-$endpoint --fail || continue
-rm -f /tmp/flowdumper/${FILE}
-done
-
-exit 0
-```
+    - `cp src/flowdumper_upload.sh /usr/bin/flowdumper_upload.sh`
     - `chmod +x /usr/bin/flowdumper_upload.sh`
 
 - Set up cron job for upload
