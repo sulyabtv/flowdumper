@@ -1,5 +1,8 @@
 #include "flowdumper.hpp"
 
+#include <sys/poll.h>
+#include <sys/signalfd.h>
+
 #include <csignal>
 #include <cstring>
 #include <filesystem>
@@ -10,10 +13,6 @@
 namespace fs = std::filesystem;
 
 namespace flowdumper {
-
-volatile sig_atomic_t exit_signaled = 0;
-
-static void sighandler(__attribute__((unused)) int s) { exit_signaled = 1; }
 
 ct_flow_tuple extract_flow_tuple(nf_conntrack *ct) {
     ct_flow_tuple flow_tuple = {};
@@ -123,7 +122,7 @@ static int process_netlink_msg(const nlmsghdr *nlh, void *data) {
     return MNL_CB_OK;
 }
 
-mnl_socket *init_netlink_socket() {
+mnl_socket *init_nfct_socket() {
     mnl_socket *nl = mnl_socket_open(NETLINK_NETFILTER);
     if (nl == NULL) {
         return NULL;
@@ -159,20 +158,27 @@ void write_output(std::vector<ct_flow> &flows, fs::path &outdir) {
 int main() {
     using namespace flowdumper;
 
-    // Create "flowdumper" directory under /tmp for writing output
+    /* Create "flowdumper" directory under /tmp for writing output */
     fs::path outdir = fs::temp_directory_path().append("flowdumper");
     fs::create_directory(outdir);
 
-    // Set up signal handling
-    struct sigaction sigact = {};
-    sigact.sa_flags = SA_RESTART;
-    sigact.sa_handler = sighandler;
-    sigaction(SIGINT, &sigact, NULL);
-    sigaction(SIGTERM, &sigact, NULL);
-    sigaction(SIGHUP, &sigact, NULL);
+    /* Set up signal handling */
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGTERM);
+    sigaddset(&mask, SIGHUP);
+    sigprocmask(SIG_BLOCK, &mask, nullptr);
 
-    // Initialize netlink socket
-    mnl_socket *nl = init_netlink_socket();
+    int sig_fd = signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK);
+    if (sig_fd < 0) {
+        std::cerr << "Error: Could not create signalfd: " << strerror(errno)
+                  << std::endl;
+        return -1;
+    }
+
+    /* Initialize netlink socket */
+    mnl_socket *nl = init_nfct_socket();
     if (nl == NULL) {
         std::cerr << "Error: Could not initialize netlink socket: "
                   << strerror(errno) << std::endl;
@@ -187,39 +193,69 @@ int main() {
     std::cerr << "Netlink socket buffer size set to " << nlsockbufsize
               << " bytes" << std::endl;
 
-    // Main loop
+    /* Initialize database and fds for polling */
     flow_db db;
-    while (!exit_signaled) {
-        char buf[RECV_BUFSIZE];
-        int ret = mnl_socket_recvfrom(nl, buf, sizeof(buf));
-        if (ret < 0) {
-            if (errno == ENOBUFS) {
-                std::cerr
-                    << "WARNING: We have hit ENOBUFS! Consider increasing "
-                       "buffer size using setsockopt as in "
-                       "conntrack_tools/conntrack.c"
-                    << std::endl;
-                continue;
-            }
-            std::cerr << "Error: mnl_socket_recvfrom returned failure: "
-                      << strerror(errno) << std::endl;
+    int nl_fd = mnl_socket_get_fd(nl);
+    struct pollfd fds[2] = {
+        {.fd = nl_fd, .events = POLLIN},
+        {.fd = sig_fd, .events = POLLIN},
+    };
+
+    /* Main loop */
+    while (true) {
+        int ready = poll(fds, 2, -1);
+        if (ready < 0) {
+            if (errno == EINTR) continue;
+            std::cerr << "Error: poll failed: " << strerror(errno) << std::endl;
             break;
         }
 
-        ret = mnl_cb_run(buf, ret, 0, 0, process_netlink_msg,
-                         static_cast<void *>(&db));
-        if (ret == -1) {
-            std::cerr << "Error: mnl_cb_run returned failure: "
-                      << strerror(errno) << std::endl;
-            break;
-        } else if (db.finished_flows.size() > FLOWBUF_CACHE_MAX) {
-            write_output(db.finished_flows, outdir);
+        /* Check for signals */
+        if (fds[1].revents & POLLIN) {
+            struct signalfd_siginfo si;
+            ssize_t r = read(sig_fd, &si, sizeof(si));
+            if (r == sizeof(si) &&
+                (si.ssi_signo == SIGINT || si.ssi_signo == SIGTERM ||
+                 si.ssi_signo == SIGHUP)) {
+                std::cerr << "Signal received: " << strsignal(si.ssi_signo)
+                          << std::endl;
+                break;
+            }
+        }
+
+        /* Check for netlink data */
+        if (fds[0].revents & POLLIN) {
+            char buf[RECV_BUFSIZE];
+            int ret = mnl_socket_recvfrom(nl, buf, sizeof(buf));
+            if (ret < 0) {
+                if (errno == ENOBUFS) {
+                    std::cerr
+                        << "WARNING: We have hit ENOBUFS! Consider increasing "
+                           "buffer size using setsockopt."
+                        << std::endl;
+                    continue;
+                }
+                std::cerr << "Error: mnl_socket_recvfrom returned failure : "
+                          << strerror(errno) << std::endl;
+                break;
+            }
+
+            ret = mnl_cb_run(buf, ret, 0, 0, process_netlink_msg,
+                             static_cast<void *>(&db));
+            if (ret == -1) {
+                std::cerr << "Error: mnl_cb_run returned failure: "
+                          << strerror(errno) << std::endl;
+                break;
+            } else if (db.finished_flows.size() > FLOWBUF_CACHE_MAX) {
+                write_output(db.finished_flows, outdir);
+            }
         }
     }
 
     std::cerr << "Attempting to exit gracefully.." << std::endl;
     write_output(db.finished_flows, outdir);
     mnl_socket_close(nl);
+    close(sig_fd);
 
     return 0;
 }
