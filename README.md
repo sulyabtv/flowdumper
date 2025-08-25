@@ -1,15 +1,17 @@
-
 # Flowdumper
 
-Description goes here.
+flowdumper is a measurement tool that runs in the background, obtains information about network flows from the kernel, and dumps it into a temporary file.
+It is bundled with a script that uploads the dump file to a remote endpoint every night for research purposes.
 
-## Build Instructions
+flowdumper is packaged for OpenWRT, and has been tested on OpenWRT 22.03, 23.05 and 24.10.
+
+## Build Instructions (general, non-OpenWRT)
 
 - Install dependencies: `libnetfilter_conntrack`, `libnetfilter_conntrack-devel`, 
 `libmnl`, `libmnl-devel`, `libnfnetlink`, `libnfnetlink-devel`, `libstdc++`
 - Navigate to `src/` and run `make`
 
-## Run instructions
+## Run instructions (general, non-OpenWRT)
 
 - Enable `netfilter` accounting
     - Create (as root) `/etc/sysctl.d/42-flowdumper.conf`, write the line 
